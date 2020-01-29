@@ -212,22 +212,14 @@ local main = function(...)
 	local args = {...}
 	local argc = #args
 
-	if args[1] == "generate" then
-		if argc == 2 and args[2] == "secret" then
+	if args[1] == "generate" and argc == 2 then
+		if args[2] == "secret" then
 			os.setlocale("", "all")
 			generate_secret(SECRETFILE)
 			return
 		end
 
-		if argc == 2 and args[2] == "header" then
-			local keydata = load_keydata(SECRETFILE)
-			generate_header(HEADERFILE, keydata)
-			return
-		end
-
-		if argc == 1 then
-			os.setlocale("", "all")
-			generate_secret(SECRETFILE)
+		if args[2] == "header" then
 			local keydata = load_keydata(SECRETFILE)
 			generate_header(HEADERFILE, keydata)
 			return
@@ -243,8 +235,9 @@ local main = function(...)
 
 		if argc == 2 then
 			local keydata = load_keydata(SECRETFILE)
-			local filelist = loadfile(args[3])()
+			local filelist = loadfile(args[2])()
 			for k, v in ipairs(filelist) do
+				print(("Encrypting '%s' as '%s'"):format(v[1], v[2]))
 				encrypt_file_as(v[1], v[2], keydata)
 			end
 			return

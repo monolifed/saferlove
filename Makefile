@@ -40,6 +40,9 @@ publickey.h : encrypt.lua monocypher$(EXT_SO) privatekey.lua
 privatekey.lua : encrypt.lua monocypher$(EXT_SO)
 	luajit encrypt.lua generate secret
 
+encryptfiles : filelist.lua encrypt.lua monocypher$(EXT_SO)
+	luajit encrypt.lua encrypt filelist.lua
+
 clean :
 	$(RM) *.o
 	$(RM) monocypher$(EXT_SO)
