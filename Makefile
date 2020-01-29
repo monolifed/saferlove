@@ -11,6 +11,7 @@ ifeq ($(OS),Windows_NT)
 	CC := gcc
 	COMPILE := $(CC) $(COMMON_FLAGS) -c -O2 -I$(JIT_INC)
 	LINK := $(CC) -O -shared
+	LIBS := -l:$(JIT_DLL)
 else
 	PLATFORM := p
 	EXT_SO := .so
@@ -19,10 +20,10 @@ else
 endif
 
 monocypher$(EXT_SO) : utils.o monocypher.o
-	$(LINK) -o $@ $^
+	$(LINK) -o $@ $^ $(LIBS)
 
 safer$(EXT_SO) : safer.o monocypher.o
-	$(LINK) -o $@ $^
+	$(LINK) -o $@ $^ $(LIBS)
 
 utils.o : src/$(PLATFORM)utils.c src/utils.h
 	$(COMPILE) -o $@ $<
@@ -33,6 +34,11 @@ monocypher.o : src/monocypher.c src/monocypher.h
 safer.o : src/safer.c src/loader.h publickey.h
 	$(COMPILE) -o $@ $<
 
+publickey.h : encrypt.lua monocypher$(EXT_SO) privatekey.lua
+	luajit encrypt.lua generate header
+
+privatekey.lua : encrypt.lua monocypher$(EXT_SO)
+	luajit encrypt.lua generate secret
 
 clean :
 	$(RM) *.o
