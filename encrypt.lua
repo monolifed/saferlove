@@ -2,7 +2,7 @@ local mc = require "monocypher"
 local ffi = require("ffi")
 
 local SECRETFILE = "privatekey.lua"
-local HEADERFILE = "publickey.h"
+local HEADERFILE = "src/publickey.h"
 local BLOCK = 32
 
 
@@ -34,7 +34,7 @@ return {
 
 local HEADERFILE_TEMPLATE =
 [[
-static const uint8_t publickey[32] = "%s";
+#define PUBLICKEY "%s"
 
 ]]
 

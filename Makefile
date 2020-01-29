@@ -31,10 +31,10 @@ utils.o : src/$(PLATFORM)utils.c src/utils.h
 monocypher.o : src/monocypher.c src/monocypher.h
 	$(COMPILE) -o $@ $<
 
-safer.o : src/safer.c src/loader.h publickey.h
+safer.o : src/safer.c src/loader.lua src/publickey.h
 	$(COMPILE) -o $@ $<
 
-publickey.h : encrypt.lua monocypher$(EXT_SO) privatekey.lua
+src/publickey.h : encrypt.lua monocypher$(EXT_SO) privatekey.lua
 	luajit encrypt.lua generate header
 
 privatekey.lua : encrypt.lua monocypher$(EXT_SO)

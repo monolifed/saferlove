@@ -52,5 +52,7 @@ void *zeromemory(void *dst, size_t dstlen)
 #include <bcrypt.h>
 int randmemory(void *dst, size_t dstlen)
 {
-	return BCryptGenRandom(NULL, dst, dstlen, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+	if (BCryptGenRandom(NULL, dst, dstlen, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == STATUS_SUCCESS)
+		return dstlen;
+	return 0;
 }

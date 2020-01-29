@@ -3,8 +3,8 @@
 
 #include "monocypher.h"
 
-#include "loader.h"
-#include "../publickey.h"
+#include "loader.lua"  // const char LOADER_LUA[]
+#include "publickey.h" // #define PUBLICKEY
 
 #define SZNONCE 24
 #define SZMAC 16
@@ -35,14 +35,14 @@ static int load(lua_State *L)
 	const uint8_t *sign   = mac   + SZMAC;
 	const uint8_t *cypher = sign  + SZSIGN;
 	
-	if (crypto_check(sign, publickey, cypher, cypher_size) != 0)
+	if (crypto_check(sign, (uint8_t *)PUBLICKEY, cypher, cypher_size) != 0)
 	{
 		printf("Unlock: file '%s' is not signed\n", filename);
 		return 0;
 	}
 	
 	uint8_t text[cypher_size];
-	if (crypto_unlock(text, publickey, nonce, mac, cypher, cypher_size) != 0)
+	if (crypto_unlock(text, (uint8_t *)PUBLICKEY, nonce, mac, cypher, cypher_size) != 0)
 	{
 		printf("Unlock: file '%s' is not signed\n", filename);
 		return 0;
@@ -60,7 +60,7 @@ LUALIB_API int luaopen_safer_core(lua_State *L)
 
 LUALIB_API int luaopen_safer(lua_State *L)
 {
-	if (luaL_dostring(L, loader))
+	if (luaL_dostring(L, LOADER_LUA))
 	{
 		printf("Safer: luaL_dostring error\n");
 	}
