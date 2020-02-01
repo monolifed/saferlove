@@ -1,41 +1,34 @@
 local mc = require "monocypher"
 local ffi = require("ffi")
 
+-- These are for interactive key generation, you should change these
+local SALT1 = "saferlove salt value for secret key generation"
+local SALT2 = "saferlove salt value for encryption key generation"
+
+-- These affect key generation
+-- See: https://monocypher.org/manual/argon2i
+local NB_BLOCKS = 100000
+local NB_ITERS  = 3
+
+-- constants
 local SECRETFILE = "privatekey.lua"
 local HEADERFILE = "src/publickey.h"
 local BLOCK = 32
-
-
---[[
-The following can be modified:
-NB_BLOCKS, NB_ITERS : see https://monocypher.org/manual/argon2i
-HASHSALT = true : SALT parameter is hashed to compute the final salt
-HASHSALT = nil/false: first 32 bytes of SALT are copied to the final salt
-SALT evaluates to false: HASHSALT is ignored and the final salt is random
---]]
-
-local NB_BLOCKS = 100000
-local NB_ITERS  = 3
-local HASHSALT
-local SALT
 
 local SECRETKEY_TEMPLATE =
 [[
 -- do not release/share
 return {
-	blocks = %i,
-	iters = %i,
-	salt = "%s",
 	secret = "%s",
 	public = "%s",
+	encrypt = "%s",
 }
-
 ]]
 
 local HEADERFILE_TEMPLATE =
 [[
-#define PUBLICKEY "%s"
-
+static const uint8_t publickey[]  = "%s";
+static const uint8_t encryptkey[] = "%s";
 ]]
 
 local tocstr = function(s, len)
@@ -60,131 +53,183 @@ local fromhex = function(hex)
 	return table.concat(t)
 end
 
-local generate_secret = function(filename)
-	local f = io.open(filename, "r")
+-- same inputs === same outputs (i.e. no randomness)
+local generate_interactive = function()
+	local f = io.open(SECRETFILE, "r")
 	if f then
 		f:close()
-		io.write("File exists. Do you want to overwrite file? yes/no: ")
-		local input = io.read()
-		if input ~= "yes" then
-			return print(filename .. " skipped")
+		io.write("Do you want to overwrite the file? yes/no: ")
+		if io.read() ~= "yes" then
+			return print(SECRETFILE .. " skipped")
 		end
 	end
 	
-	local buffer = ffi.new("char[?]", 3 * BLOCK)
-	local pass1 = buffer
-	local pass2 = buffer + BLOCK
-	--local pass2 = ffi.new("char[?]", BLOCK)
-	local len1 = mc.readpassword("password:", pass1, BLOCK)
-	local len2 = mc.readpassword("confirm:" , pass2, BLOCK)
-	if len1 ~= len2 or mc.crypto_verify32(pass1, pass2) ~= 0 then
-		return error("Generation error: passwords do not match")
-	end
-
-	local salt = buffer + 2 * BLOCK
-	local ret
-	if type(SALT) ~= "string" then
-		ret = mc.randmemory(salt, BLOCK)
-		if ret ~= BLOCK then
-			return error("Generation error: not enough random")
-		end
-	elseif HASHSALT then
-		mc.crypto_blake2b_general(salt, BLOCK, nil, 0, SALT, #SALT);
-	else
-		ffi.copy(salt, SALT, math.min(#SALT, 32));
-	end
-
+	local buffer_size = 4 * BLOCK
+	local buffer = ffi.new("char[?]", buffer_size)
+	local secret  = buffer + 0 * BLOCK
+	local public  = buffer + 1 * BLOCK
+	local encrypt = buffer + 2 * BLOCK
+	local salt    = buffer + 3 * BLOCK
+	
 	local work_area = ffi.new("char[?]", NB_BLOCKS * 1024)
-	mc.crypto_argon2i(pass1, BLOCK, work_area, NB_BLOCKS, NB_ITERS,
-		pass2, BLOCK, salt, BLOCK); 
-
-	--mc.crypto_key_exchange_public_key(pass2, pass1);
-	mc.crypto_sign_public_key(pass2, pass1);
 	
-	local f = io.open(filename, "w")
-	f:write(SECRETKEY_TEMPLATE:format(NB_BLOCKS, NB_ITERS,
-		tohex(salt, BLOCK), tohex(pass1, BLOCK), tohex(pass2, BLOCK)))
-	--mc.crypto_wipe(buffer, ffi.sizeof(buffer))
+	local len1 = mc.readpassword("password:", secret , BLOCK)
+	local len2 = mc.readpassword("confirm:" , encrypt, BLOCK)
+	if len1 ~= len2 or mc.crypto_verify32(secret, encrypt) ~= 0 then
+		return error("generate_interactive: passwords do not match")
+	end
+	
+	-- secret key / public key
+	mc.crypto_blake2b_general(salt, BLOCK, nil, 0, SALT1, #SALT1);
+	mc.crypto_argon2i(secret, BLOCK, work_area, NB_BLOCKS, NB_ITERS,
+		secret, len1, salt, BLOCK); 
+	mc.crypto_sign_public_key(public, secret);
+	
+	-- encryption key
+	mc.crypto_blake2b_general(salt, BLOCK, nil, 0, SALT2, #SALT2);
+	mc.crypto_blake2b_general(encrypt, BLOCK, nil, 0, encrypt, len2);
+	mc.crypto_argon2i(encrypt, BLOCK, work_area, NB_BLOCKS, NB_ITERS,
+		encrypt, BLOCK, salt, BLOCK); 
+	
+	local f = io.open(SECRETFILE, "w")
+	f:write(SECRETKEY_TEMPLATE:format(tohex(secret, BLOCK),
+		tohex(public, BLOCK), tohex(encrypt, BLOCK)))
+	mc.crypto_wipe(buffer, buffer_size)
 	f:close()
-	print(filename .. " written")
+	print(SECRETFILE .. " written")
 end
 
-local generate_header = function(filename, keydata)
-	local buffer = ffi.new("char[?]", BLOCK)
-	--mc.crypto_key_exchange_public_key(buffer, keydata.rawsecret);
-	mc.crypto_sign_public_key(buffer, keydata.rawsecret);
+local generate_secret = function()
+	local f = io.open(SECRETFILE, "r")
+	if f then
+		f:close()
+		return print(SECRETFILE .. " skipped")
+	end
+	
+	local buffer_size = 4 * BLOCK
+	local buffer = ffi.new("char[?]", buffer_size)
+	local secret  = buffer + 0 * BLOCK
+	local public  = buffer + 1 * BLOCK
+	local encrypt = buffer + 2 * BLOCK
+	local salt    = buffer + 3 * BLOCK
+	
+	local work_area = ffi.new("char[?]", NB_BLOCKS * 1024)
+	
+	-- secret key / public key
+	if  mc.randmemory(salt, BLOCK) ~= BLOCK or
+		mc.randmemory(secret, BLOCK) ~= BLOCK then
+		return error("generate_secret: not enough random")
+	end
+	mc.crypto_argon2i(secret, BLOCK, work_area, NB_BLOCKS, NB_ITERS,
+		secret, BLOCK, salt, BLOCK); 
+	mc.crypto_sign_public_key(public, secret);
+	
+	-- encryption key
+	if  mc.randmemory(salt, BLOCK) ~= BLOCK or
+		mc.randmemory(encrypt, BLOCK) ~= BLOCK then
+		return error("generate_secret: not enough random")
+	end
+	mc.crypto_argon2i(encrypt, BLOCK, work_area, NB_BLOCKS, NB_ITERS,
+		encrypt, BLOCK, salt, BLOCK); 
+	
+	local f = io.open(SECRETFILE, "w")
+	f:write(SECRETKEY_TEMPLATE:format(tohex(secret, BLOCK),
+		tohex(public, BLOCK), tohex(encrypt, BLOCK)))
+	mc.crypto_wipe(buffer, buffer_size)
+	f:close()
+	print(SECRETFILE .. " written")
+end
 
-	if mc.crypto_verify32(buffer, keydata.rawpublic) ~= 0 then
+local generate_header = function(keydata)
+	local buffer = ffi.new("char[?]", BLOCK)
+	mc.crypto_sign_public_key(buffer, keydata.secret);
+
+	if mc.crypto_verify32(buffer, keydata.public) ~= 0 then
 		return error("Keys do no match")
 	end
 	
-	local f = io.open(filename, "w")
-	f:write(HEADERFILE_TEMPLATE:format(tocstr(buffer, BLOCK)))
-	--mc.crypto_wipe(buffer, ffi.sizeof(buffer))
+	local f = io.open(HEADERFILE, "w")
+	f:write(HEADERFILE_TEMPLATE:format(
+		tocstr(keydata.public, BLOCK), tocstr(keydata.encrypt, BLOCK)))
 	f:close()
-	print(filename .. " written")
+	print(HEADERFILE .. " written")
 end
 
--- File Layout:
----------------
--- nonce  24
--- mac    16
--- sign   64
--- cypher ??
--- EOF
+--[[ 
+File Layout:
+----------------
+:plain:
+	nonce | 24 |
+	mac   | 16 | (of encrypted part)
+:encrypted: (with encryption key using nonce)
+	text  | ?? |
+	sign  | 64 | (of unencrypted text with secret key)
+:eof:
+----------------
+--]]
 
-local lock = function(key, text, secret_key)
-	local text_size = #text
-	local buffer_size = text_size + 24 + 16 + 64
+local SZSIGN, SZNONCE, SZMAC = 64, 24, 16
+local SZEXTRA = SZSIGN + SZNONCE + SZMAC
+
+local lock = function(str, keydata)
+	local text_size = #str
+	local buffer_size = text_size + SZEXTRA
 	local buffer = ffi.new("char[?]", buffer_size)
 	local nonce = buffer
-	local mac = buffer + 24
-	local sign = buffer + 24 + 16
-	local cypher = buffer + 24 + 16 + 64
+	local mac   = nonce  + SZNONCE
+	local text  = mac    + SZMAC
+	local sign  = text + text_size
 	
-	mc.randmemory(nonce, 24)
-	ffi.copy(cypher, text, text_size)
-	mc.crypto_lock(mac, cypher, key, nonce, cypher, text_size)
+	ffi.copy(text, str, text_size)
+	mc.crypto_sign(sign, keydata.secret, keydata.public, text, text_size); 
 
-	mc.crypto_sign(sign, secret_key, public_key, cypher, text_size); 
+	mc.randmemory(nonce, SZNONCE)
+	mc.crypto_lock(mac, text, keydata.encrypt, nonce, text, text_size + SZSIGN)
 
 	return ffi.string(buffer, buffer_size)
 end
 
-local unlock = function(key, cypher)
-	local buffer_size = #cypher
-	local text_size = buffer_size - 24 - 16 - 64
+local unlock = function(str, keydata)
+	local buffer_size = #str
+	local text_size = buffer_size - SZEXTRA
 	local buffer = ffi.new("char[?]", buffer_size)
-	ffi.copy(buffer, cypher, buffer_size)
 	local nonce = buffer
-	local mac   = buffer + 24
-	local sign  = buffer + 24 + 16
-	local text  = buffer + 24 + 16 + 64
-
+	local mac   = nonce + SZNONCE
+	local text  = mac   + SZMAC
+	local sign  = text  + text_size
+	
+	ffi.copy(buffer, str, buffer_size)
+	
 	local ret
-	ret = mc.crypto_check(sign, key, text, text_size)
-	if ret ~= 0 then return error("Unlock: file is unsigned") end
-	 
-	ret = mc.crypto_unlock(text, key, nonce, mac, text, text_size)
+	
+	ret = mc.crypto_unlock(text, keydata.encrypt, nonce, mac, text, text_size + SZSIGN)
 	if ret ~= 0 then return error("Unlock: file is corrupt") end
 	
+	ret = mc.crypto_check(sign, keydata.public, text, text_size)
+	if ret ~= 0 then return error("Unlock: file is unsigned") end
+	 
 	return ffi.string(text, text_size)
 end
 
-local load_keydata = function(filename)
-	local f = io.open(filename, "r")
+local load_keydata = function()
+	local f = io.open(SECRETFILE, "r")
 	if not f then return error("File does not exist") end
 	f:close()
 	
-	local ret, err = loadfile(filename)
+	local ret, err = loadfile(SECRETFILE)
 	if not ret then return error(err) end
 	
-	local keydata = ret()
-	keydata.rawsecret = ffi.new("char[?]", 32)
-	keydata.rawpublic = ffi.new("char[?]", 32)
+	local ret = ret()
+	local keydata = {}
+	keydata.buffer = ffi.new("char[?]", 3 * BLOCK)
+	keydata.secret  = keydata.buffer + 0 * BLOCK
+	keydata.public  = keydata.buffer + 1 * BLOCK
+	keydata.encrypt = keydata.buffer + 2 * BLOCK
 
-	ffi.copy(keydata.rawsecret, fromhex(keydata.secret), 32)
-	ffi.copy(keydata.rawpublic, fromhex(keydata.public), 32)
+	ffi.copy(keydata.secret,  fromhex(ret.secret),  BLOCK)
+	ffi.copy(keydata.public,  fromhex(ret.public),  BLOCK)
+	ffi.copy(keydata.encrypt, fromhex(ret.encrypt), BLOCK)
+
 	return keydata
 end
 
@@ -196,7 +241,7 @@ local encrypt_file_as = function(infilename, outfilename, keydata)
 	f:close()
 
 	f = io.open(outfilename, "wb")
-	f:write(lock(keydata.rawpublic, text, keydata.rawsecret))
+	f:write(lock(text, keydata))
 	f:close()
 end
 
@@ -212,29 +257,43 @@ local main = function(...)
 	local args = {...}
 	local argc = #args
 
+	if args[1] == "test" and argc == 1 then
+		local keydata = load_keydata()
+		local a = lock(help, keydata)
+		local b = unlock(a, keydata)
+		print(help == b)
+		return
+	end
+
 	if args[1] == "generate" and argc == 2 then
 		if args[2] == "secret" then
 			os.setlocale("", "all")
-			generate_secret(SECRETFILE)
+			generate_secret()
+			return
+		end
+
+		if args[2] == "interactive" then
+			os.setlocale("", "all")
+			generate_interactive()
 			return
 		end
 
 		if args[2] == "header" then
-			local keydata = load_keydata(SECRETFILE)
-			generate_header(HEADERFILE, keydata)
+			local keydata = load_keydata()
+			generate_header(keydata)
 			return
 		end
 	end
 
 	if args[1] == "encrypt" then
 		if argc == 3 then
-			local keydata = load_keydata(SECRETFILE)
+			local keydata = load_keydata()
 			encrypt_file_as(arg[2], arg[3], keydata)
 			return
 		end
 
 		if argc == 2 then
-			local keydata = load_keydata(SECRETFILE)
+			local keydata = load_keydata()
 			local filelist = loadfile(args[2])()
 			for k, v in ipairs(filelist) do
 				print(("Encrypting '%s' as '%s'"):format(v[1], v[2]))
