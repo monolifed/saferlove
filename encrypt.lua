@@ -1,5 +1,11 @@
-local mc = require "monocypher"
+local mc  = require("monocypher")
 local ffi = require("ffi")
+local bit = require("bit")
+
+-- Detect big endian and place a define in publickey.h if it is big endian
+-- So that C knows how to handle xor0-xor7
+local BE = ffi.abi("be")
+
 
 -- These are for interactive key generation, you should change these
 local SALT1 = "saferlove salt value for secret key generation"
@@ -27,30 +33,44 @@ return {
 
 local HEADERFILE_TEMPLATE =
 [[
-static const uint8_t publickey[]  = "%s";
-static const uint8_t encryptkey[] = "%s";
+static const uint8_t publickey[32]  = "%s";
+static const uint8_t encryptkey[32] = "%s";
+// static const uint8_t xorkey[32] = "%s";
+static const uint32_t xor0 = 0x%.8X, xor1 = 0x%.8X, xor2 = 0x%.8X, xor3 = 0x%.8X;
+static const uint32_t xor4 = 0x%.8X, xor5 = 0x%.8X, xor6 = 0x%.8X, xor7 = 0x%.8X;
+#define %s_XOR_N
 ]]
 
+local xorwith = function(s, x, len)
+	if type(s) ~= "cdata" then return error("tocstr: arg1 not cdata") end
+	if type(x) ~= "cdata" then return error("tocstr: arg2 not cdata") end
+	for i = 0, len - 1 do s[i] = bit.bxor(s[i], x[i]) end
+end
+
 local tocstr = function(s, len)
-	if type(s) == "cdata" then s = ffi.string(s, len) end
+	if type(s) ~= "cdata" then return error("tocstr: not cdata") end
 	local t = {}
-	for i = 1, #s do t[i] = string.format("\\x%.2X", s:byte(i)) end
+	for i = 0, len - 1 do t[i + 1] = string.format("\\x%.2X", s[i]) end
 	return table.concat(t)
 end
 
 local tohex = function(s, len)
-	if type(s) == "cdata" then s = ffi.string(s, len) end
+	if type(s) ~= "cdata" then return error("tohex: not cdata") end
 	local t = {}
-	for i = 1, #s do t[i] = string.format("%.2X", s:byte(i)) end
+	for i = 0, len - 1 do t[i + 1] = string.format("%.2X", s[i]) end
 	return table.concat(t)
 end
 
-local fromhex = function(hex)
-	t = {}
-	for i = 1, #hex, 2 do
-		table.insert(t, string.char(tonumber(hex:sub(i, i + 1), 16)))
+local fromhex = function(s, hex, len)
+	if type(s) ~= "cdata" then return error("fromhex: not cdata") end
+	if type(hex) ~= "string" or #hex ~= 2 * len or hex:match("[^%x]") then
+		return error("fromhex: invalid hex string".. #hex)
 	end
-	return table.concat(t)
+	local j
+	for i = 0, len - 1 do
+		j = 2 * i + 1
+		s[i] = tonumber(hex:sub(j, j + 1), 16)
+	end
 end
 
 -- same inputs === same outputs (i.e. no randomness)
@@ -65,13 +85,13 @@ local generate_interactive = function()
 	end
 	
 	local buffer_size = 4 * BLOCK
-	local buffer = ffi.new("char[?]", buffer_size)
+	local buffer = ffi.new("uint8_t[?]", buffer_size)
 	local secret  = buffer + 0 * BLOCK
 	local public  = buffer + 1 * BLOCK
 	local encrypt = buffer + 2 * BLOCK
 	local salt    = buffer + 3 * BLOCK
 	
-	local work_area = ffi.new("char[?]", NB_BLOCKS * 1024)
+	local work_area = ffi.new("uint8_t[?]", NB_BLOCKS * 1024)
 	
 	local len1 = mc.readpassword("password:", secret , BLOCK)
 	local len2 = mc.readpassword("confirm:" , encrypt, BLOCK)
@@ -107,13 +127,13 @@ local generate_secret = function()
 	end
 	
 	local buffer_size = 4 * BLOCK
-	local buffer = ffi.new("char[?]", buffer_size)
+	local buffer = ffi.new("uint8_t[?]", buffer_size)
 	local secret  = buffer + 0 * BLOCK
 	local public  = buffer + 1 * BLOCK
 	local encrypt = buffer + 2 * BLOCK
 	local salt    = buffer + 3 * BLOCK
 	
-	local work_area = ffi.new("char[?]", NB_BLOCKS * 1024)
+	local work_area = ffi.new("uint8_t[?]", NB_BLOCKS * 1024)
 	
 	-- secret key / public key
 	if  mc.randmemory(salt, BLOCK) ~= BLOCK or
@@ -141,16 +161,27 @@ local generate_secret = function()
 end
 
 local generate_header = function(keydata)
-	local buffer = ffi.new("char[?]", BLOCK)
-	mc.crypto_sign_public_key(buffer, keydata.secret);
+	local temp = ffi.new("uint8_t[?]", 2 * BLOCK)
+	mc.crypto_sign_public_key(temp, keydata.secret);
 
-	if mc.crypto_verify32(buffer, keydata.public) ~= 0 then
-		return error("Keys do no match")
+	if mc.crypto_verify32(temp, keydata.public) ~= 0 then
+		return error("generate_header: Keys do no match")
 	end
 	
+	local xor = temp + BLOCK
+	if  mc.randmemory(xor, BLOCK) ~= BLOCK then
+		return error("generate_header: not enough random")
+	end
+	
+	ffi.copy(temp, keydata.encrypt, BLOCK)
+	xorwith(temp, xor, BLOCK)
+	
+	local x32 = ffi.cast("uint32_t*", xor)
 	local f = io.open(HEADERFILE, "w")
-	f:write(HEADERFILE_TEMPLATE:format(
-		tocstr(keydata.public, BLOCK), tocstr(keydata.encrypt, BLOCK)))
+	f:write(HEADERFILE_TEMPLATE:format(tocstr(keydata.public, BLOCK),
+		tocstr(temp, BLOCK), tohex(xor, BLOCK),
+		x32[0], x32[1], x32[2], x32[3], x32[4], x32[5], x32[6], x32[7],
+		BE and "BE" or "LE"))
 	f:close()
 	print(HEADERFILE .. " written")
 end
@@ -174,7 +205,7 @@ local SZEXTRA = SZSIGN + SZNONCE + SZMAC
 local lock = function(str, keydata)
 	local text_size = #str
 	local buffer_size = text_size + SZEXTRA
-	local buffer = ffi.new("char[?]", buffer_size)
+	local buffer = ffi.new("uint8_t[?]", buffer_size)
 	local nonce = buffer
 	local mac   = nonce  + SZNONCE
 	local text  = mac    + SZMAC
@@ -192,7 +223,7 @@ end
 local unlock = function(str, keydata)
 	local buffer_size = #str
 	local text_size = buffer_size - SZEXTRA
-	local buffer = ffi.new("char[?]", buffer_size)
+	local buffer = ffi.new("uint8_t[?]", buffer_size)
 	local nonce = buffer
 	local mac   = nonce + SZNONCE
 	local text  = mac   + SZMAC
@@ -221,14 +252,14 @@ local load_keydata = function()
 	
 	local ret = ret()
 	local keydata = {}
-	keydata.buffer = ffi.new("char[?]", 3 * BLOCK)
+	keydata.buffer = ffi.new("uint8_t[?]", 3 * BLOCK)
 	keydata.secret  = keydata.buffer + 0 * BLOCK
 	keydata.public  = keydata.buffer + 1 * BLOCK
 	keydata.encrypt = keydata.buffer + 2 * BLOCK
 
-	ffi.copy(keydata.secret,  fromhex(ret.secret),  BLOCK)
-	ffi.copy(keydata.public,  fromhex(ret.public),  BLOCK)
-	ffi.copy(keydata.encrypt, fromhex(ret.encrypt), BLOCK)
+	fromhex(keydata.secret,  ret.secret,  BLOCK)
+	fromhex(keydata.public,  ret.public,  BLOCK)
+	fromhex(keydata.encrypt, ret.encrypt, BLOCK)
 
 	return keydata
 end

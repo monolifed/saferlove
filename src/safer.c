@@ -4,12 +4,14 @@
 #include "monocypher.h"
 
 #include "loader.lua"  // const char LOADER_LUA[]
-#include "publickey.h" // #define PUBLICKEY
+#include "publickey.h" // uint8_t publickey[32], encryptkey[32], xor0-xor7
 
 #define SZNONCE 24
 #define SZMAC 16
 #define SZSIGN 64
 #define SZEXTRA (SZNONCE + SZMAC + SZSIGN)
+
+uint8_t enckey[32]; // the reconstructed key
 
 static int load(lua_State *L)
 {
@@ -37,7 +39,7 @@ static int load(lua_State *L)
 	int cypher_size = text_size + SZSIGN; // because we enc'd text+sign
 	
 	uint8_t text[cypher_size];
-	if (crypto_unlock(text, encryptkey, nonce, mac, cypher, cypher_size) != 0)
+	if (crypto_unlock(text, enckey, nonce, mac, cypher, cypher_size) != 0)
 	{
 		printf("Unlock: file '%s' is not signed\n", filename);
 		return 0;
@@ -56,8 +58,33 @@ static int load(lua_State *L)
 	return 1;
 }
 
+
 LUALIB_API int luaopen_safer_core(lua_State *L)
 {
+	#define XR(N) xor##N
+	
+	#ifdef LE_XOR_N // little endian
+	  #define XE(N) \
+	    enckey[4 * N    ] = (XR(N)      ) & 0xFF; enckey[4 * N + 1] = (XR(N) >>  8) & 0xFF; \
+	    enckey[4 * N + 2] = (XR(N) >> 16) & 0xFF; enckey[4 * N + 3] = (XR(N) >> 24) & 0xFF;
+	#endif
+	
+	#ifdef BE_XOR_N // big endian
+	  #define XE(N) \
+	    enckey[4 * N    ] = (XR(N) >> 24) & 0xFF; enckey[4 * N + 1] = (XR(N) >> 16) & 0xFF; \
+	    enckey[4 * N + 2] = (XR(N) >>  8) & 0xFF; enckey[4 * N + 3] = (XR(N)      ) & 0xFF;
+	#endif
+	
+	XE(0) XE(1) XE(2) XE(3) XE(4) XE(5) XE(6) XE(7)
+	
+	#undef XE
+	#undef XR
+	
+	for (int i = 0; i < 32; i++)
+	{
+		enckey[i] = enckey[i] ^ encryptkey[i];
+	}
+	
 	lua_pushcfunction(L, load);
 	return 1;
 }
