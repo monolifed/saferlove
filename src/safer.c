@@ -3,8 +3,11 @@
 
 #include "monocypher.h"
 
-#include "loader.lua"  // const char LOADER_LUA[]
-#include "publickey.h" // uint8_t publickey[32], encryptkey[32], xor0-xor7
+#include "loader.lua"
+// char LOADER_LUA[]
+#include "publickey.h"
+// uint8_t publickey[32], encryptkey[32], xor0, ..., xor7
+// #define LE_XOR_N or BE_XOR_N
 
 #define SZNONCE 24
 #define SZMAC 16
@@ -36,10 +39,8 @@ static int load(lua_State *L)
 	const uint8_t *mac    = nonce  + SZNONCE;
 	const uint8_t *cypher = mac    + SZMAC;
 	
-	int cypher_size = text_size + SZSIGN; // because we enc'd text+sign
-	
-	uint8_t text[cypher_size];
-	if (crypto_unlock(text, enckey, nonce, mac, cypher, cypher_size) != 0)
+	uint8_t text[text_size + SZSIGN]; // text+sign is encrypted
+	if (crypto_unlock(text, enckey, nonce, mac, cypher, sizeof text) != 0)
 	{
 		printf("Unlock: file '%s' is not signed\n", filename);
 		return 0;
@@ -52,15 +53,15 @@ static int load(lua_State *L)
 		return 0;
 	}
 	
-
-	
 	luaL_loadbuffer(L, (char *) text, text_size, filename);
+	crypto_wipe(text, sizeof text);
 	return 1;
 }
 
 
 LUALIB_API int luaopen_safer_core(lua_State *L)
 {
+	// FIXME: do it right before decryption and wipe the key?
 	#define XR(N) xor##N
 	
 	#ifdef LE_XOR_N // little endian
