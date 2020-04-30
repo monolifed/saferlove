@@ -2,42 +2,40 @@ COMMON_FLAGS := -Wall -Wextra -pedantic -std=c99
 JIT_INC := "/usr/include/luajit-2.1"
 JIT_DLL := "path.to.luajit.dll"
 
-COMPILE := $(CC) $(COMMON_FLAGS) -c -O2 -I$(JIT_INC)
-LINK := $(CC) -O -shared
+COMPILE_FLAGS := $(COMMON_FLAGS) -c -O2 -I$(JIT_INC)
+LINK_FLAGS := -O2 -shared
 ENCRYPT := luajit encrypt.lua
 
 ifeq ($(OS),Windows_NT)
-	PREFIX := w
+	UTILS_C := wutils.c
 	RM := del /Q
-	EXT := .exe
-	EXT_SO := .dll
+	EXT := .dll
 	CC := gcc
 	LIBS := -l:$(JIT_DLL)
 else
-	PREFIX := p
-	EXT_SO := .so
-	COMPILE := $(COMPILE) -fpic
-	LINK := $(LINK) -fpic
+	UTILS_C := putils.c
+	EXT := .so
+	COMPILE_FLAGS := $(COMPILE_FLAGS) -fpic
+	LINK_FLAGS := $(LINK_FLAGS) -fpic
 endif
 
-MONOCYPHER_SO := monocypher$(EXT_SO)
-SAFER_SO := safer$(EXT_SO)
-UTILS_C := $(PREFIX)utils.c
+MONOCYPHER_SO := monocypher$(EXT)
+SAFER_SO := safer$(EXT)
 
 $(MONOCYPHER_SO) : utils.o monocypher.o
-	$(LINK) -o $@ $^
+	$(CC) $(LINK_FLAGS) -o $@ $^
 
 $(SAFER_SO) : safer.o monocypher.o
-	$(LINK) -o $@ $^ $(LIBS)
+	$(CC) $(LINK_FLAGS) -o $@ $^ $(LIBS)
 
 utils.o : src/$(UTILS_C) src/utils.h
-	$(COMPILE) -o $@ $<
+	$(CC) $(COMPILE_FLAGS) -o $@ $<
 
 monocypher.o : src/monocypher.c src/monocypher.h
-	$(COMPILE) -o $@ $<
+	$(CC) $(COMPILE_FLAGS) -o $@ $<
 
 safer.o : src/safer.c src/loader.lua src/publickey.h
-	$(COMPILE) -o $@ $<
+	$(CC) $(COMPILE_FLAGS) -o $@ $<
 
 src/publickey.h : encrypt.lua $(MONOCYPHER_SO) privatekey.lua
 	$(ENCRYPT) generate header
