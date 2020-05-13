@@ -1,5 +1,6 @@
 #include <lua.h>
 #include <lauxlib.h>
+#include <stdlib.h>
 
 #include "monocypher.h"
 
@@ -39,8 +40,9 @@ static int load(lua_State *L)
 	const uint8_t *mac    = nonce  + SZNONCE;
 	const uint8_t *cypher = mac    + SZMAC;
 	
-	uint8_t text[text_size + SZSIGN]; // text+sign is encrypted
-	if (crypto_unlock(text, enckey, nonce, mac, cypher, sizeof text) != 0)
+	unsigned cypherlen = text_size + SZSIGN; // text+sign is encrypted
+	uint8_t *text = malloc(cypherlen); 
+	if (crypto_unlock(text, enckey, nonce, mac, cypher, cypherlen) != 0)
 	{
 		printf("Unlock: file '%s' is not signed\n", filename);
 		return 0;
@@ -54,7 +56,8 @@ static int load(lua_State *L)
 	}
 	
 	luaL_loadbuffer(L, (char *) text, text_size, filename);
-	crypto_wipe(text, sizeof text);
+	crypto_wipe(text, cypherlen);
+	free(text);
 	return 1;
 }
 
