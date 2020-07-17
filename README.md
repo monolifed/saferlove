@@ -1,5 +1,5 @@
 # saferlove
-(not really) safer love: (mis)uses encryption to make your files unreadable
+Uses encryption to make your source files harder to read
 
 # How it works
 1) run `make safer.so` to create the module
