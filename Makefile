@@ -1,4 +1,4 @@
-COMMON_FLAGS := -Wall -Wextra -pedantic -std=c99
+COMMON_FLAGS := -Wall -Wextra -Wvla -pedantic -std=c99
 JIT_INC := "/usr/include/luajit-2.1"
 JIT_DLL := "path.to.luajit.dll"
 
